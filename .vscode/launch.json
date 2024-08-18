@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Django Management Command",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/manage.py",
+            "args": [
+                "value_area_check"
+            ],
+            "django": true,
+            "justMyCode": true
+        }
+    ]
+}
