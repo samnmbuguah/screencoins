@@ -102,8 +102,9 @@ def get_value_area_pairs(exchange, symbols, market_type, start_of_month, mode="t
             # Get tick size for the symbol
             tick_size = float(exchange.markets[symbol]["precision"]["price"])
 
-            # Create MarketProfile object with tick size and mode
-            mp = MarketProfile(df, tick_size=tick_size, mode=mode)
+            # Create MarketProfile object with tick size, mode, and value_area_pct
+            value_area_pct = 0.95  # Set your desired value area percentage
+            mp = MarketProfile(df, tick_size=tick_size, mode=mode, value_area_pct=value_area_pct)
 
             # Slice the MarketProfile object
             try:
