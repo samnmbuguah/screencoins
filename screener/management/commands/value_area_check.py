@@ -28,8 +28,8 @@ class Command(BaseCommand):
             ]
 
             # Get value area pairs for spot and futures prices
-            spot_results = get_value_area_pairs(exchange, futures_symbols, "spot", start_of_month, mode="tpo")
-            futures_results = get_value_area_pairs(exchange, futures_symbols, "futures", start_of_month, mode="tpo")
+            spot_results = get_value_area_pairs(exchange, futures_symbols, "spot", start_of_month, mode="vol")
+            futures_results = get_value_area_pairs(exchange, futures_symbols, "futures", start_of_month, mode="vol")
 
             # Convert results to dictionaries for easy lookup
             spot_dict = {result['symbol']: result for result in spot_results}
@@ -82,7 +82,7 @@ def get_value_area_pairs(exchange, symbols, market_type, start_of_month, mode="t
                 symbol = symbol  # Keep the symbol as is for futures market
 
             # Fetch OHLCV data
-            ohlcv = exchange.fetch_ohlcv(symbol, "1h", since)
+            ohlcv = exchange.fetch_ohlcv(symbol, "4h", since)
             if not ohlcv:
                 continue
 
@@ -103,7 +103,7 @@ def get_value_area_pairs(exchange, symbols, market_type, start_of_month, mode="t
             tick_size = float(exchange.markets[symbol]["precision"]["price"])
 
             # Create MarketProfile object with tick size, mode, and value_area_pct
-            value_area_pct = 0.95  # Set your desired value area percentage
+            value_area_pct = 0.7  # Set your desired value area percentage
             mp = MarketProfile(df, tick_size=tick_size, mode=mode, value_area_pct=value_area_pct)
 
             # Slice the MarketProfile object
