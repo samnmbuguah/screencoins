@@ -17,3 +17,5 @@ screencoins/__pycache__/
 
 # Ignore screener app files
 screener/__pycache__/
+screencoins/__pycache__/settings.cpython-310.pyc
+screencoins/__pycache__/urls.cpython-310.pyc
