@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def get_value_area_pairs(exchange, symbols, market_type, start_of_month, percentage=0.70):
+def get_value_area_pairs(exchange, symbols, market_type, start_of_month, percentage=0.84):
     vah_val_results = []
 
     for symbol in symbols:
@@ -55,7 +55,7 @@ def get_value_area_pairs(exchange, symbols, market_type, start_of_month, percent
 
     return vah_val_results
 
-def calculate_value_area(df, percentage=0.70, bins=100):
+def calculate_value_area(df, percentage=0.84, bins=100):
     """
     Calculates the value area based on volume.
 

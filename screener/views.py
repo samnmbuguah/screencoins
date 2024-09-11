@@ -39,8 +39,8 @@ class ValueAreaCheckView(View):
                     filtered_futures_symbols.append(symbol)
             
             # Get value area pairs for spot and futures prices
-            spot_results = get_value_area_pairs(exchange, filtered_futures_symbols, "spot", start_of_month, percentage=0.70)
-            futures_results = get_value_area_pairs(exchange, filtered_futures_symbols, "futures", start_of_month, percentage=0.70)
+            spot_results = get_value_area_pairs(exchange, filtered_futures_symbols, "spot", start_of_month, percentage=0.99)
+            futures_results = get_value_area_pairs(exchange, filtered_futures_symbols, "futures", start_of_month, percentage=0.99)
 
             # Convert results to dictionaries for easy lookup
             spot_dict = {result['symbol']: result for result in spot_results}
