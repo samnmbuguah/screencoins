@@ -17,3 +17,5 @@ screencoins/__pycache__/
 
 # Ignore screener app files
 screener/__pycache__/
+ta-lib-0.4.0-src.tar.gz
+ta-lib/
