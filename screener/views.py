@@ -57,15 +57,7 @@ class ValueAreaCheckView(View):
             
                     if (spot_result['current_price'] > spot_result['vah'] or spot_result['current_price'] < spot_result['val']) and \
                        (futures_result['current_price'] > futures_result['vah'] or futures_result['current_price'] < futures_result['val']):
-                        outside_value_area.append({
-                            'symbol': normalized_symbol,
-                            'spot_current_price': spot_result['current_price'],
-                            'spot_vah': spot_result['vah'],
-                            'spot_val': spot_result['val'],
-                            'futures_current_price': futures_result['current_price'],
-                            'futures_vah': futures_result['vah'],
-                            'futures_val': futures_result['val']
-                        })
+                        outside_value_area.append(f"{normalized_symbol}:USDT")
             
             return JsonResponse(outside_value_area, safe=False)
         except Exception as e:
