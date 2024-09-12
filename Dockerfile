@@ -48,5 +48,5 @@ RUN crontab /etc/cron.d/fetch_markets
 # Create the log file to be able to run tail
 RUN touch /var/log/cron.log
 
-# Run the command on container startup
-CMD ["cron", "-f"]
+# Run the script once and then start cron
+CMD /app/run_fetch_markets.sh && cron -f
