@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     wget \
     tar \
+    cron \
     && rm -rf /var/lib/apt/lists/*
 
 # Install TA-Lib from source
