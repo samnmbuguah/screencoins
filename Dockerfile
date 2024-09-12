@@ -36,6 +36,10 @@ RUN pip install -r requirements.txt
 # Copy the Django project
 COPY . /app/
 
+# Copy the shell script
+COPY run_fetch_markets.sh /app/
+RUN chmod +x /app/run_fetch_markets.sh
+
 # Add the cron job
 RUN echo "0 * * * * /app/run_fetch_markets.sh >> /var/log/cron.log 2>&1" > /etc/cron.d/fetch_markets
 RUN chmod 0644 /etc/cron.d/fetch_markets
@@ -45,4 +49,4 @@ RUN crontab /etc/cron.d/fetch_markets
 RUN touch /var/log/cron.log
 
 # Run the command on container startup
-CMD cron && tail -f /var/log/cron.log
+CMD ["cron", "-f"]
