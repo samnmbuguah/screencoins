@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from datetime import datetime, timezone
 
 def get_value_area_pairs(exchange, symbols, market_type, start_of_month, percentage=0.84):
     vah_val_results = []
@@ -95,7 +96,6 @@ def calculate_value_area(df, percentage=0.84, bins=100):
     return value_area_high, value_area_low
 
 
-
 def is_price_within_fvg(exchange, symbol, current_price, min_gap=0, consider_open_close=False):
     """
     Checks if the current price is within an unfilled Fair Value Gap (FVG) in the 1-day timeframe.
@@ -111,8 +111,13 @@ def is_price_within_fvg(exchange, symbol, current_price, min_gap=0, consider_ope
         bool: True if the current price is within an unfilled FVG, False otherwise.
     """
     try:
-        # Fetch OHLCV data for the 1-day timeframe
-        ohlcv = exchange.fetch_ohlcv(symbol, '1d')
+        # Calculate the timestamp for the beginning of the last year
+        now = datetime.now(timezone.utc)
+        start_of_last_year = datetime(now.year - 1, 1, 1, tzinfo=timezone.utc)
+        since = int(start_of_last_year.timestamp() * 1000)
+
+        # Fetch OHLCV data for the 1-day timeframe from the beginning of last year
+        ohlcv = exchange.fetch_ohlcv(symbol, '1d', since)
         if not ohlcv:
             return False
 
