@@ -21,7 +21,8 @@ RUN apt-get update && \
     libexpat1-dev \
     liblzma-dev \
     tk-dev \
-    apt-utils && \
+    apt-utils \
+    ca-certificates && \
     wget https://www.python.org/ftp/python/3.12.5/Python-3.12.5.tgz && \
     tar -xzf Python-3.12.5.tgz && \
     cd Python-3.12.5 && \
