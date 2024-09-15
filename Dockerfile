@@ -36,10 +36,16 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
+# Switch to the non-root user
+USER samuel
+
 # Install Python dependencies
 COPY requirements.txt /app/
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN pip install --user --upgrade pip && \
+    pip install --user -r requirements.txt
+
+# Switch back to root user to copy project files and set permissions
+USER root
 
 # Copy the Django project
 COPY . /app/
@@ -55,3 +61,6 @@ RUN echo "0 * * * * /app/run_fetch_markets.sh >> /var/log/cron.log 2>&1" > /etc/
 
 # Expose the port
 EXPOSE 8042
+
+# Switch back to the non-root user
+USER samuel
