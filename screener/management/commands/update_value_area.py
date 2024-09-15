@@ -66,10 +66,7 @@ class Command(BaseCommand):
                             'val': spot_result['val']
                         })
             
-            # Clear old results
-            ValueAreaResult.objects.all().delete()
-            
-            # Save new results
+            # Save new results without clearing old results
             for result in outside_value_area:
                 ValueAreaResult.objects.create(
                     symbol=result['symbol'],
