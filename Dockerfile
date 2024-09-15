@@ -39,6 +39,9 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
+# Create a non-root user
+RUN useradd -m -d /home/samuel -s /bin/bash samuel
+
 # Switch to the non-root user
 USER samuel
 
