@@ -26,7 +26,9 @@ RUN apt-get update && \
     liblzma-dev \
     tk-dev \
     ca-certificates \
-    cron && \
+    cron \
+    python3-dev \
+    gcc && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -71,3 +73,8 @@ EXPOSE 8042
 
 # Switch back to the non-root user
 USER samuel
+
+# Run Django commands
+CMD sh -c "python manage.py makemigrations screener && \
+           python manage.py migrate && \
+           python manage.py runserver 0.0.0.0:8042"
