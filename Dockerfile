@@ -1,5 +1,5 @@
 # Base image
-FROM debian:bullseye-slim
+FROM python:3.12.6-slim-bullseye
 
 # Set the working directory
 WORKDIR /app
@@ -23,14 +23,6 @@ RUN apt-get update && \
     tk-dev \
     apt-utils \
     ca-certificates && \
-    wget https://www.python.org/ftp/python/3.12.5/Python-3.12.5.tgz && \
-    tar -xzf Python-3.12.5.tgz && \
-    cd Python-3.12.5 && \
-    ./configure --enable-optimizations && \
-    make -j$(nproc) && \
-    make altinstall && \
-    cd .. && \
-    rm -rf Python-3.12.5 Python-3.12.5.tgz && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -46,8 +38,8 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
 
 # Install Python dependencies
 COPY requirements.txt /app/
-RUN pip3.12 install --upgrade pip && \
-    pip3.12 install -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
 
 # Copy the Django project
 COPY . /app/
