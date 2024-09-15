@@ -8,7 +8,7 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends apt-utils
 
-# Install other dependencies
+# Install other dependencies including cron
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -25,7 +25,8 @@ RUN apt-get update && \
     libexpat1-dev \
     liblzma-dev \
     tk-dev \
-    ca-certificates && \
+    ca-certificates \
+    cron && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
