@@ -7,3 +7,4 @@ requests==2.32.3
 scipy==1.14.1
 TA-Lib==0.4.32
 debugpy==1.8.5
+sqlite3==3.45.1
