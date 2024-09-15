@@ -4,7 +4,11 @@ FROM python:3.12.6-slim-bullseye
 # Set the working directory
 WORKDIR /app
 
-# Install dependencies
+# Install apt-utils first to avoid debconf errors
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends apt-utils
+
+# Install other dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -21,7 +25,6 @@ RUN apt-get update && \
     libexpat1-dev \
     liblzma-dev \
     tk-dev \
-    apt-utils \
     ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
