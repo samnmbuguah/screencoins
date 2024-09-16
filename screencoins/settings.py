@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'screener.apps.ScreenerConfig',
+    'django_crontab',
     'screener',
 ]
 
@@ -129,3 +131,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Binance API credentials
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
+
+CRONJOBS = [
+    ('0 * * * *', 'django.core.management.call_command', ['fetch_markets']),
+    ('0 * * * *', 'django.core.management.call_command', ['update_value_area']),
+]
