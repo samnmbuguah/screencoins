@@ -45,19 +45,16 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
 # Create a non-root user
 RUN useradd -m -d /home/samuel -s /bin/bash samuel
 
-# Switch to the non-root user
+# Install Python dependencies as samuel user
 USER samuel
-
-# Install Python dependencies
 COPY requirements.txt /app/
 RUN pip install --user --upgrade pip && \
     pip install --user -r requirements.txt
 
 # Switch back to root user to copy project files and set permissions
 USER root
-
-# Copy the Django project
 COPY . /app/
+RUN chown -R samuel:samuel /app
 
 # Configure crontab for the user
 USER samuel
