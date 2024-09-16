@@ -59,6 +59,13 @@ USER root
 # Copy the Django project
 COPY . /app/
 
+# Set permissions for the SQLite database file
+RUN chown -R samuel:samuel /app/db.sqlite3
+
+# Configure crontab for the user
+USER samuel
+RUN (crontab -l 2>/dev/null; echo "* * * * * /usr/bin/python /app/manage.py some_cron_job") | crontab -
+
 # Expose the port
 EXPOSE 8042
 
