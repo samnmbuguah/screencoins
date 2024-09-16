@@ -8,4 +8,3 @@ class ScreenerConfig(AppConfig):
     def ready(self):
         # Run the commands once when the server starts
         call_command('fetch_markets')
-        call_command('update_value_area')
