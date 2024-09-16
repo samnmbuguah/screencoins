@@ -64,10 +64,3 @@ EXPOSE 8042
 
 # Switch back to the non-root user
 USER samuel
-
-# Run Django commands
-CMD sh -c "python manage.py makemigrations screener && \
-           python manage.py migrate && \
-           python manage.py crontab add && \
-           python manage.py update_value_area && \
-           python manage.py runserver 0.0.0.0:8042"
