@@ -1,7 +1,8 @@
 services:
   web:
     build: .
-    command: sh -c "python manage.py makemigrations screener && \
+    command: sh -c "chown samuel:samuel /app/db.sqlite3 && \
+                    python manage.py makemigrations screener && \
                     python manage.py migrate && \
                     python manage.py fetch_markets && \
                     python manage.py update_value_area && \
