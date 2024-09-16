@@ -42,7 +42,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'screener.apps.ScreenerConfig',
     'django_crontab',
-    'screener',
 ]
 
 MIDDLEWARE = [
