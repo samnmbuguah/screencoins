@@ -19,3 +19,7 @@ screencoins/__pycache__/
 screener/__pycache__/
 ta-lib-0.4.0-src.tar.gz
 ta-lib/
+
+screener/data/futures_markets.json
+screener/data/matching_futures_markets.json
+screener/data/spot_markets.json
