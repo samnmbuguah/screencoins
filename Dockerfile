@@ -28,6 +28,7 @@ RUN apt-get update && \
     ca-certificates \
     python3-dev \
     gcc && \
+    cron && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
