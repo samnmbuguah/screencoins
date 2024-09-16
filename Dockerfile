@@ -26,7 +26,6 @@ RUN apt-get update && \
     liblzma-dev \
     tk-dev \
     ca-certificates \
-    cron \
     python3-dev \
     gcc && \
     apt-get clean && \
@@ -59,15 +58,6 @@ USER root
 # Copy the Django project
 COPY . /app/
 
-# Copy the shell script
-COPY run_fetch_markets.sh /app/
-RUN chmod +x /app/run_fetch_markets.sh
-
-# Add the cron job
-RUN echo "0 * * * * /app/run_fetch_markets.sh >> /var/log/cron.log 2>&1" > /etc/cron.d/fetch_markets && \
-    chmod 0644 /etc/cron.d/fetch_markets && \
-    crontab /etc/cron.d/fetch_markets
-
 # Expose the port
 EXPOSE 8042
 
@@ -77,4 +67,5 @@ USER samuel
 # Run Django commands
 CMD sh -c "python manage.py makemigrations screener && \
            python manage.py migrate && \
+           python manage.py crontab add && \
            python manage.py runserver 0.0.0.0:8042"
