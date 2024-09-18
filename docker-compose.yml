@@ -9,6 +9,7 @@ services:
                     python manage.py runserver 0.0.0.0:8042"
     volumes:
       - .:/app
+      - ./db.sqlite3:/app/db.sqlite3
     ports:
       - "8042:8042"
     env_file:
