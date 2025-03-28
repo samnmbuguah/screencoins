@@ -1,0 +1,121 @@
+//@version=5
+indicator("Fair Value Gap Finder", overlay = true)
+
+// Input parameters
+onlyShowLast = input.bool(false, "Only show latest gap", group="Mind The Gap")
+// Removing the 24-hour restriction parameter, we'll show all FVGs regardless of age
+showHistoricalFVGs = input.bool(true, "Show all historical FVGs", group="Filters")
+
+// Get 1H and 5M data
+[h1_open, h1_high, h1_low, h1_close, h1_time, h1_changed] = request.security(syminfo.tickerid, "60", [open, high, low, close, time, barstate.isconfirmed], lookahead=barmerge.lookahead_on)
+[m5_open, m5_high, m5_low, m5_close, m5_time, m5_changed] = request.security(syminfo.tickerid, "5", [open, high, low, close, time, barstate.isconfirmed], lookahead=barmerge.lookahead_on)
+
+// Initialize boxes for both timeframes
+var box h1Box = na
+var box m5Box = na
+
+// Colors for FVGs
+sellFVGColor = input.color(color.new(color.red, 70), group='Styles')
+buyFVGColor = input.color(color.new(color.green, 70), group='Styles')
+
+// Initialize variables to store FVG conditions and details
+var bool h1_buyCondition = false
+var bool h1_sellCondition = false
+var bool m5_buyCondition = false
+var bool m5_sellCondition = false
+var float h1_high_level = na
+var float h1_low_level = na
+var float m5_high_level = na
+var float m5_low_level = na
+
+// Function to check FVG conditions for 1H timeframe - includes close position check
+check1HFVG(float _high2, float _low2, float _high1, float _low1, float _high0, float _low0, float _close2, float _close1, float _close0) =>
+    // Bullish FVG: Gap between i-1 high and i+1 low, and i+1 close below i high
+    buy = _high2 < _low0 and _close0 < _high1
+    // Bearish FVG: Gap between i+1 high and i-1 low, and i+1 close above i low
+    sell = _low2 > _high0 and _close0 > _low1
+    
+    [buy, sell]
+
+// Function to check FVG conditions for 5M timeframe - only checks for the gap
+check5MFVG(float _high2, float _low2, float _high1, float _low1, float _high0, float _low0) =>
+    // Bullish FVG: Only check for gap between i-1 high and i+1 low
+    buy = _high2 < _low0
+    // Bearish FVG: Only check for gap between i+1 high and i-1 low
+    sell = _low2 > _high0
+    
+    [buy, sell]
+
+// Check FVGs for 1H timeframe
+if h1_changed
+    [buy, sell] = check1HFVG(h1_high[2], h1_low[2], h1_high[1], h1_low[1], h1_high, h1_low, h1_close[2], h1_close[1], h1_close)
+    h1_buyCondition := buy
+    h1_sellCondition := sell
+    
+    if h1_buyCondition
+        h1_high_level := h1_high[1]
+        h1_low_level := h1_low[1]
+        if onlyShowLast
+            h1Box.delete()
+        h1Box := box.new(h1_time[1], h1_high[2], h1_time, h1_low, border_color = color.new(color.black,100), bgcolor = color.new(buyFVGColor, 70), extend=extend.right, xloc=xloc.bar_time)
+    else if h1_sellCondition
+        h1_high_level := h1_high[1]
+        h1_low_level := h1_low[1]
+        if onlyShowLast
+            h1Box.delete()
+        h1Box := box.new(h1_time[1], h1_low[2], h1_time, h1_high, border_color = color.new(color.black,100), bgcolor = color.new(sellFVGColor, 70), extend=extend.right, xloc=xloc.bar_time)
+
+// Check FVGs for 5M timeframe
+if m5_changed
+    [buy, sell] = check5MFVG(m5_high[2], m5_low[2], m5_high[1], m5_low[1], m5_high, m5_low)
+    m5_buyCondition := buy
+    m5_sellCondition := sell
+    m5_high_level := m5_high[1]
+    m5_low_level := m5_low[1]
+    
+    if m5_buyCondition
+        if onlyShowLast
+            m5Box.delete()
+        m5Box := box.new(m5_time[1], m5_high[2], m5_time, m5_low, border_color = color.new(color.black,100), bgcolor = color.new(buyFVGColor, 85), extend=extend.right, xloc=xloc.bar_time)
+    else if m5_sellCondition
+        if onlyShowLast
+            m5Box.delete()
+        m5Box := box.new(m5_time[1], m5_low[2], m5_time, m5_high, border_color = color.new(color.black,100), bgcolor = color.new(sellFVGColor, 85), extend=extend.right, xloc=xloc.bar_time)
+
+// Check for valid setups with new conditions
+var bool crossedUpperLine = false
+var bool crossedLowerLine = false
+var bool touchesUpperLine = false
+var bool touchesLowerLine = false
+
+// Check if crossed upper line of 1H FVG (for bullish)
+if h1_buyCondition and not na(h1_high_level)
+    // Price crossed from below to above the upper line
+    crossedUpperLine := m5_high[2] < h1_high_level and m5_high[1] >= h1_high_level
+
+// Check if crossed lower line of 1H FVG (for bearish)
+if h1_sellCondition and not na(h1_low_level)
+    // Price crossed from above to below the lower line
+    crossedLowerLine := m5_low[2] > h1_low_level and m5_low[1] <= h1_low_level
+
+// Check if any of the three FVG candles touch the line
+if h1_buyCondition and not na(h1_high_level)
+    upperTouch1 = math.abs(m5_high[2] - h1_high_level) / h1_high_level < 0.001
+    upperTouch2 = math.abs(m5_high[1] - h1_high_level) / h1_high_level < 0.001
+    upperTouch3 = math.abs(m5_high - h1_high_level) / h1_high_level < 0.001
+    touchesUpperLine := upperTouch1 or upperTouch2 or upperTouch3
+
+if h1_sellCondition and not na(h1_low_level)
+    lowerTouch1 = math.abs(m5_low[2] - h1_low_level) / h1_low_level < 0.001
+    lowerTouch2 = math.abs(m5_low[1] - h1_low_level) / h1_low_level < 0.001
+    lowerTouch3 = math.abs(m5_low - h1_low_level) / h1_low_level < 0.001
+    touchesLowerLine := lowerTouch1 or lowerTouch2 or lowerTouch3
+
+// No time restriction, all historical FVGs are considered
+// Valid setup conditions
+bullishSetup = h1_buyCondition and m5_buyCondition and crossedUpperLine and touchesUpperLine
+bearishSetup = h1_sellCondition and m5_sellCondition and crossedLowerLine and touchesLowerLine
+
+// Plot setup signals
+plotshape(bullishSetup and m5_changed, title="Bullish Setup", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+plotshape(bearishSetup and m5_changed, title="Bearish Setup", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small) 
