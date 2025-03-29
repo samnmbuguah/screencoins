@@ -36,10 +36,16 @@ fi
 if [ ! -f "$REQUIREMENTS_FILE" ]; then
     echo -e "${YELLOW}Creating $REQUIREMENTS_FILE...${NC}"
     cat > "$REQUIREMENTS_FILE" << EOF
-ccxt==3.1.56
-pandas==2.0.3
-numpy==1.24.3
-matplotlib==3.7.2
+ccxt==4.3.97
+Django==5.1.1
+numpy==2.1.1
+pandas==2.2.2
+python-dotenv==1.0.1
+requests==2.32.3
+scipy==1.14.1
+TA-Lib==0.4.32
+debugpy==1.8.5
+django-crontab>=0.7.1
 EOF
     echo -e "${GREEN}Created $REQUIREMENTS_FILE${NC}"
 fi
@@ -72,14 +78,13 @@ mkdir -p screener/results
 # Check if we need to extract futures symbols first
 if [ ! -f "screener/results/valid_futures_symbols.json" ]; then
     echo -e "${YELLOW}No valid futures symbols found. Running extraction script...${NC}"
-    python3 extract_futures_symbols.py
+    python3 screener/extract_futures_symbols.py
     echo -e "${GREEN}Futures symbols extracted!${NC}"
 fi
 
 # Run the screener
 echo -e "${BLUE}Running FVG Screener...${NC}"
-cd screener
-python3 run_fvg_screener.py
+python3 screener/run_fvg_screener.py
 
 echo -e "${GREEN}Screening complete! Results are saved in the screener/results directory.${NC}"
 echo -e "${BLUE}Deactivating virtual environment...${NC}"
