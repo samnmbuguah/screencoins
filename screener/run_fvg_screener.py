@@ -15,6 +15,7 @@ def load_valid_futures_symbols():
         
     with open(symbols_file, 'r') as f:
         data = json.load(f)
+        print(f"Found {len(data['symbols'])} symbols in the file")
         return data['symbols']
 
 def main():
@@ -37,6 +38,7 @@ def main():
     })
 
     # Find FVG setups
+    print("\nStarting FVG analysis...")
     fvg_setups = find_fvg_setups(exchange, valid_symbols, "futures")
 
     # Create results directory if it doesn't exist
@@ -49,6 +51,7 @@ def main():
     json_filename = os.path.join(results_dir, f"fvg_setups_{timestamp}.json")
 
     # Save results to JSON file
+    print(f"\nSaving results to {json_filename}")
     with open(json_filename, 'w') as f:
         json.dump({
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -59,6 +62,7 @@ def main():
     # Print results
     print("\n=== FVG Setups ===")
     if fvg_setups:
+        print(f"\nFound {len(fvg_setups)} FVG setups:")
         for setup in fvg_setups:
             print(f"\nSymbol: {setup['symbol']}")
             print(f"Type: {setup['type'].upper()}")
