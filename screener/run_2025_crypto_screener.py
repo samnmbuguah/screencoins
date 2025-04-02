@@ -11,6 +11,31 @@ import pandas as pd
 MIN_1H_GAP_PERCENT = 0.4
 MIN_5M_GAP_PERCENT = 0.1
 
+def get_monthly_value_area(exchange, symbol, start_date):
+    """Get monthly Value Area for a symbol"""
+    try:
+        # Get monthly data
+        since = int(start_date.timestamp() * 1000)
+        monthly_data = exchange.fetch_ohlcv(symbol, '1M', since=since, limit=1)
+        if not monthly_data:
+            return None, None
+            
+        # OHLCV data is returned as [timestamp, open, high, low, close, volume]
+        timestamp, open_price, high, low, close, volume = monthly_data[0]
+        
+        # Calculate price level and volume
+        price = low + (high - low) * 0.5
+        
+        # For monthly data, we'll use a simple approach since we only have one candle
+        # The Value Area will be the price level with 70% of the volume
+        va_high = price
+        va_low = price
+        
+        return va_high, va_low
+    except Exception as e:
+        print(f"Error getting monthly Value Area for {symbol}: {str(e)}")
+        return None, None
+
 def custom_process_symbol(data):
     """Modified process_symbol function that uses different date ranges for 1H and 5M timeframes."""
     symbol, exchange, market_type, start_of_2025, start_date_5m, end_date_5m = data
@@ -23,6 +48,12 @@ def custom_process_symbol(data):
         
         # Skip symbols with price too low (often have lower liquidity)
         if current_price < 0.000001:
+            return []
+
+        # Get monthly Value Area
+        va_high, va_low = get_monthly_value_area(exchange, symbol, start_of_2025)
+        if va_high is None or va_low is None:
+            print(f"Could not calculate Value Area for {symbol}")
             return []
 
         # Fetch 1H data from beginning of 2025
@@ -117,8 +148,8 @@ def custom_process_symbol(data):
                     bullish_gap = current_candle_5m["Low"] - prev2_candle_5m["High"]
                     bullish_gap_percent = (bullish_gap / prev_candle_5m["Close"]) * 100
                     
-                    # Only include FVGs with gap >= MIN_5M_GAP_PERCENT
-                    if bullish_gap_percent >= MIN_5M_GAP_PERCENT:
+                    # Only include FVGs with gap >= MIN_5M_GAP_PERCENT and below Value Area Low
+                    if bullish_gap_percent >= MIN_5M_GAP_PERCENT and current_candle_5m["Low"] < va_low:
                         # For bullish setup, check if the 1H FVG's upper line is within the 5M FVG range
                         line_in_range = prev2_candle_5m["High"] <= fvg_1h["upper_line"] <= current_candle_5m["Low"]
                         
@@ -145,7 +176,9 @@ def custom_process_symbol(data):
                                 },
                                 "stop_loss": prev_candle_5m["Low"],     # Using middle candle low as stop
                                 "risk_reward": 2,                        # Default to 2R
-                                "alignment_type": "upper"               # For bullish setups, we align on upper line
+                                "alignment_type": "upper",              # For bullish setups, we align on upper line
+                                "va_high": va_high,                     # Add Value Area information
+                                "va_low": va_low
                             })
                 
                 # Check for BEARISH 5M FVG using the same PineScript logic
@@ -154,8 +187,8 @@ def custom_process_symbol(data):
                     bearish_gap = prev2_candle_5m["Low"] - current_candle_5m["High"]
                     bearish_gap_percent = (bearish_gap / prev_candle_5m["Close"]) * 100
                     
-                    # Only include FVGs with gap >= MIN_5M_GAP_PERCENT
-                    if bearish_gap_percent >= MIN_5M_GAP_PERCENT:
+                    # Only include FVGs with gap >= MIN_5M_GAP_PERCENT and above Value Area High
+                    if bearish_gap_percent >= MIN_5M_GAP_PERCENT and current_candle_5m["High"] > va_high:
                         # For bearish setup, check if the 1H FVG's lower line is within the 5M FVG range
                         line_in_range = current_candle_5m["High"] <= fvg_1h["lower_line"] <= prev2_candle_5m["Low"]
                         
@@ -182,7 +215,9 @@ def custom_process_symbol(data):
                                 },
                                 "stop_loss": prev_candle_5m["High"],    # Using middle candle high as stop
                                 "risk_reward": 2,                        # Default to 2R
-                                "alignment_type": "lower"               # For bearish setups, we align on lower line
+                                "alignment_type": "lower",              # For bearish setups, we align on lower line
+                                "va_high": va_high,                     # Add Value Area information
+                                "va_low": va_low
                             })
         
         return fvg_setups
@@ -192,17 +227,8 @@ def custom_process_symbol(data):
         return []
 
 def main():
-    print("Initializing FVG Screener for Major Crypto Pairs (BTC, ETH, SOL, XRP) - Last Week Analysis")
+    print("Initializing FVG Screener for All USDT Futures Pairs - Last Week Analysis")
     
-    # List of specific coins to analyze
-    specific_symbols = [
-        "BTC/USDT",
-        "XRP/USDT"
-    ]
-        
-    print(f"Will analyze the following {len(specific_symbols)} coins: {', '.join(specific_symbols)}")
-    print(f"Using minimum gap thresholds: 1H >= {MIN_1H_GAP_PERCENT}%, 5M >= {MIN_5M_GAP_PERCENT}%")
-
     # Initialize exchange
     exchange = ccxt.binance({
         'enableRateLimit': True,
@@ -229,15 +255,60 @@ def main():
     print(f"Bullish FVG: For bearish previous candle, current high < low of 2 candles ago")
     print(f"Bearish FVG: For bullish previous candle, current low > high of 2 candles ago")
     
+    # Get list of pairs from the data folder
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    if not os.path.exists(data_dir):
+        print(f"Error: Data directory '{data_dir}' not found")
+        return
+        
+    # Get all JSON files in the data directory
+    json_files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
+    if not json_files:
+        print(f"Error: No JSON files found in '{data_dir}' directory")
+        return
+        
+    # Extract unique pairs from all JSON files
+    usdt_futures = set()
+    for json_file in json_files:
+        try:
+            with open(os.path.join(data_dir, json_file), 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, str):
+                            # Handle format like "BTC/USDT:USDT"
+                            if item.endswith(':USDT'):
+                                symbol = item.split(':')[0]  # Get the part before ':USDT'
+                                if symbol.endswith('/USDT'):
+                                    usdt_futures.add(symbol)
+                        elif isinstance(item, dict) and 'symbol' in item:
+                            symbol = item['symbol']
+                            if symbol.endswith('/USDT'):
+                                usdt_futures.add(symbol)
+        except Exception as e:
+            print(f"Error reading {json_file}: {str(e)}")
+            continue
+    
+    # Convert set to sorted list for consistent output
+    usdt_futures = sorted(list(usdt_futures))
+    
+    if not usdt_futures:
+        print("Error: No USDT pairs found in the data files")
+        return
+        
+    print(f"\nFound {len(usdt_futures)} USDT pairs to analyze")
+    print("Pairs:", ', '.join(usdt_futures))
+    print(f"Using minimum gap thresholds: 1H >= {MIN_1H_GAP_PERCENT}%, 5M >= {MIN_5M_GAP_PERCENT}%")
+    
     # Process symbols with custom date range
-    total_symbols = len(specific_symbols)
+    total_symbols = len(usdt_futures)
     print(f"\nProcessing {total_symbols} symbols using parallel processing...")
     
     # Setup for parallel processing
     max_workers = min(os.cpu_count(), 4)  # Use up to 4 CPU cores
     
     # Prepare data for parallel processing with the different date ranges
-    symbol_data = [(symbol, exchange, "futures", start_of_2025, start_date_5m, end_date_5m) for symbol in specific_symbols]
+    symbol_data = [(symbol, exchange, "futures", start_of_2025, start_date_5m, end_date_5m) for symbol in usdt_futures]
     
     all_setups = []
     
@@ -264,7 +335,7 @@ def main():
     with open(json_filename, 'w') as f:
         json.dump({
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "coins_analyzed": specific_symbols,
+            "coins_analyzed": usdt_futures,
             "analysis_periods": {
                 "1h_fvgs": f"From {start_of_2025.isoformat()} to present",
                 "5m_setups": f"One week period ({start_date_5m.isoformat()} to {end_date_5m.isoformat()})"
@@ -304,7 +375,7 @@ def main():
     print(f"\nExecution time: {execution_time:.2f} seconds")
     print(f"Total setups found: {len(all_setups)}")
     print("\n=== Summary By Symbol ===")
-    for symbol in specific_symbols:
+    for symbol in usdt_futures:
         if symbol in setups_by_symbol:
             bull_count = setups_by_symbol[symbol]["bullish"]
             bear_count = setups_by_symbol[symbol]["bearish"]
@@ -323,10 +394,11 @@ def main():
                 print(f"     1H FVG: Upper {setup['fvg_1h']['upper_line']:.8f} - Lower {setup['fvg_1h']['lower_line']:.8f} (Gap: {setup['fvg_1h'].get('gap_percent', 0):.2f}%)")
                 print(f"     5M FVG: Upper {setup['fvg_5m']['upper_line']:.8f} - Lower {setup['fvg_5m']['lower_line']:.8f} (Gap: {setup['fvg_5m'].get('gap_percent', 0):.2f}%)")
                 print(f"     Current Price: {setup['current_price']:.8f}, Stop: {setup['stop_loss']:.8f}")
+                print(f"     Value Area: High {setup['va_high']:.8f}, Low {setup['va_low']:.8f}")
             if len(setups) > 3:
                 print(f"     ... and {len(setups) - 3} more {setup_type} setups")
     else:
-        print("No FVG setups found for the major crypto pairs in the specified period.")
+        print("No FVG setups found for any pairs in the specified period.")
 
     print(f"\nResults saved to: {json_filename}")
 
