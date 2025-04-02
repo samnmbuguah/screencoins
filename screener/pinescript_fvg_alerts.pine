@@ -1,15 +1,15 @@
-//@version=5
+//@version=6
 indicator("FVG Alerts", overlay=true)
 
 // Input parameters
 min_1h_gap_percent = input.float(0.4, "Minimum 1H Gap %", minval=0.0, step=0.1)
 min_5m_gap_percent = input.float(0.1, "Minimum 5M Gap %", minval=0.0, step=0.1)
-va_length = input.int(20, "Value Area Length", minval=1)
 va_volume_threshold = input.float(70, "Value Area Volume Threshold %", minval=0, maxval=100, step=1)
 
 // Get data for both timeframes
 [high_1h, low_1h, open_1h, close_1h, volume_1h] = request.security(syminfo.tickerid, "60", [high, low, open, close, volume])
 [high_5m, low_5m, open_5m, close_5m, volume_5m] = request.security(syminfo.tickerid, "5", [high, low, open, close, volume])
+[high_month, low_month, volume_month] = request.security(syminfo.tickerid, "M", [high, low, volume])
 
 // Function to check if a candle is bearish
 is_bearish(candle_open, candle_close) =>
@@ -20,7 +20,7 @@ gap_percent(gap_size, close_price) =>
     (gap_size / close_price) * 100
 
 // Function to calculate Value Area
-calc_value_area(high, low, volume, length) =>
+calc_value_area(high, low, volume) =>
     var float[] price_levels = array.new_float(0)
     var float[] volumes = array.new_float(0)
     
@@ -29,13 +29,19 @@ calc_value_area(high, low, volume, length) =>
     array.clear(volumes)
     
     // Calculate price levels and their volumes
-    for i = 0 to length - 1
-        price = low[i] + (high[i] - low[i]) * 0.5
-        array.push(price_levels, price)
-        array.push(volumes, volume[i])
+    price = low + (high - low) * 0.5
+    array.push(price_levels, price)
+    array.push(volumes, volume)
     
     // Sort arrays by volume
-    [sorted_prices, sorted_volumes] = array.sort(price_levels, volumes)
+    sorted_indices = array.sort_indices(volumes, order.descending)
+    sorted_prices = array.new_float(0)
+    sorted_volumes = array.new_float(0)
+    
+    for i = 0 to array.size(sorted_indices) - 1
+        idx = array.get(sorted_indices, i)
+        array.push(sorted_prices, array.get(price_levels, idx))
+        array.push(sorted_volumes, array.get(volumes, idx))
     
     // Calculate cumulative volume
     float total_volume = 0
@@ -56,9 +62,8 @@ calc_value_area(high, low, volume, length) =>
     
     [va_high, va_low]
 
-// Calculate Value Areas for both timeframes
-[va_1h_high, va_1h_low] = calc_value_area(high_1h, low_1h, volume_1h, va_length)
-[va_5m_high, va_5m_low] = calc_value_area(high_5m, low_5m, volume_5m, va_length)
+// Calculate monthly Value Area
+[va_month_high, va_month_low] = calc_value_area(high_month, low_month, volume_month)
 
 // Reset variables on each bar
 var float fvg_1h_upper = na
@@ -90,11 +95,11 @@ if is_bearish(open_1h[1], close_1h[1]) and high_1h < low_1h[2]
         fvg_1h_lower := high_1h
         fvg_1h_gap := gap_pct
 
-// Detect 5M FVGs with Value Area validation
+// Detect 5M FVGs with monthly Value Area validation
 if not is_bearish(open_5m[1], close_5m[1]) and low_5m > high_5m[2]
     gap_size = low_5m - high_5m[2]
     gap_pct = gap_percent(gap_size, close_5m[1])
-    if gap_pct >= min_5m_gap_percent and low_5m > va_5m_high  // Check if FVG is above 70% VA
+    if gap_pct >= min_5m_gap_percent and low_5m > va_month_high  // Check if FVG is above 70% VA
         fvg_5m_type := "bullish"
         fvg_5m_upper := low_5m
         fvg_5m_lower := high_5m[2]
@@ -103,7 +108,7 @@ if not is_bearish(open_5m[1], close_5m[1]) and low_5m > high_5m[2]
 if is_bearish(open_5m[1], close_5m[1]) and high_5m < low_5m[2]
     gap_size = low_5m[2] - high_5m
     gap_pct = gap_percent(gap_size, close_5m[1])
-    if gap_pct >= min_5m_gap_percent and high_5m < va_5m_low  // Check if FVG is below 30% VA
+    if gap_pct >= min_5m_gap_percent and high_5m < va_month_low  // Check if FVG is below 30% VA
         fvg_5m_type := "bearish"
         fvg_5m_upper := low_5m[2]
         fvg_5m_lower := high_5m
@@ -147,9 +152,9 @@ if not na(fvg_5m_upper)
     fvg_5m_upper_line := line.new(bar_index - 2, fvg_5m_upper, bar_index + 10, fvg_5m_upper, color=color.yellow, style=line.style_dashed)
     fvg_5m_lower_line := line.new(bar_index - 2, fvg_5m_lower, bar_index + 10, fvg_5m_lower, color=color.yellow, style=line.style_dashed)
 
-// Plot Value Area
-plot(va_5m_high, "VA High", color=color.new(color.purple, 50), style=plot.style_line)
-plot(va_5m_low, "VA Low", color=color.new(color.purple, 50), style=plot.style_line)
+// Plot monthly Value Area
+plot(va_month_high, "Monthly VA High", color=color.new(color.purple, 50), style=plot.style_line)
+plot(va_month_low, "Monthly VA Low", color=color.new(color.purple, 50), style=plot.style_line)
 
 // Alert conditions
 alertcondition(aligned_bullish, title="Bullish FVG Alignment", message="Bullish FVG alignment detected!")
