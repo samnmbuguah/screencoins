@@ -3,6 +3,12 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 import os
 import json
+import ccxt
+import time
+from concurrent.futures import ProcessPoolExecutor
+
+# Minimum gap percentage for FVGs (0.42%)
+MIN_GAP_PERCENT = 0.42
 
 def get_value_area_pairs(exchange, symbols, market_type, start_of_month, percentage=0.84):
     vah_val_results = []
@@ -155,28 +161,33 @@ def is_price_within_fvg(exchange, symbol, current_price, min_gap=0, consider_ope
         print(f"Error checking FVG for {symbol}: {e}")
         return False
 
+# Cache expiry time in seconds
+CACHE_EXPIRY = 3600  # 1 hour cache validity
+
 def load_cached_data(symbol, timeframe):
-    """Load cached OHLCV data for a symbol and timeframe."""
-    # Clean symbol name for filename
+    """Get OHLCV data from cache if available and not expired."""
     clean_symbol = symbol.replace('/', '_').replace(':', '_')
     
     cache_dir = os.path.join("cache")
     if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir)
+        return None
     
     cache_file = os.path.join(cache_dir, f"{clean_symbol}_{timeframe}.json")
     if os.path.exists(cache_file):
-        try:
-            df = pd.read_json(cache_file)
-            df.index = pd.to_datetime(df.index, utc=True)
-            return df
-        except:
-            return None
+        # Check if cache is still valid
+        cache_age = time.time() - os.path.getmtime(cache_file)
+        if cache_age < CACHE_EXPIRY:
+            try:
+                df = pd.read_json(cache_file)
+                if not df.empty:
+                    return df
+            except:
+                pass
+    
     return None
 
 def save_cached_data(symbol, timeframe, df):
     """Save OHLCV data to cache."""
-    # Clean symbol name for filename
     clean_symbol = symbol.replace('/', '_').replace(':', '_')
     
     cache_dir = os.path.join("cache")
@@ -200,7 +211,9 @@ def get_ohlcv_data(exchange, symbol, timeframe, since):
         latest_required = pd.Timestamp(since, unit='ms', tz='UTC')
         
         if latest_cached >= latest_required:
-            return cached_df
+            # Only keep needed columns to save memory
+            needed_columns = ['Open', 'High', 'Low', 'Close']
+            return cached_df[needed_columns]
     
     # If no cache or cache is old, fetch new data
     try:
@@ -214,10 +227,227 @@ def get_ohlcv_data(exchange, symbol, timeframe, since):
         
         # Save to cache
         save_cached_data(symbol, timeframe, df)
-        return df
+        
+        # Only keep needed columns to save memory
+        needed_columns = ['Open', 'High', 'Low', 'Close']
+        return df[needed_columns]
     except Exception as e:
         print(f"\rProcessing symbol {symbol} - Error: {str(e)}", end="")
         return None
+
+def check_fvg(exchange, symbol, timeframe="1h", consider_open_close=True):
+    """
+    Check if a specific symbol has fair value gap (FVG) in the specified timeframe.
+    
+    Args:
+        exchange (ccxt.Exchange): The exchange object
+        symbol (str): The trading pair symbol
+        timeframe (str): Timeframe for analysis
+        consider_open_close (bool): Consider if candle close is in the gap
+        
+    Returns:
+        bool: True if FVG is found, False otherwise
+    """
+    try:
+        # Get current price
+        ticker = exchange.fetch_ticker(symbol)
+        current_price = ticker['last']
+        
+        # Get OHLCV data for the symbol
+        since = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since)
+        
+        if len(ohlcv) < 3:
+            return False
+        
+        # Convert to pandas dataframe
+        df = pd.DataFrame(ohlcv, columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"])
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], unit="ms", utc=True)
+        df.set_index("Timestamp", inplace=True)
+        
+        # Find FVG patterns
+        fvg_list = []
+        min_gap = 0  # Can filter out small FVGs
+        
+        for i in range(1, len(df)-1):
+            prev_high = df.iloc[i-1]["High"]
+            prev_low = df.iloc[i-1]["Low"]
+            curr_high = df.iloc[i]["High"]
+            curr_low = df.iloc[i]["Low"]
+            next_high = df.iloc[i+1]["High"]
+            next_low = df.iloc[i+1]["Low"]
+            
+            # Calculate reference price for percentage calculation (closing price of the middle candle)
+            reference_price = df.iloc[i]["Close"]
+
+            # Check for FVG
+            if curr_low > prev_high:
+                gap_size = curr_low - prev_high
+                gap_percent = (gap_size / reference_price) * 100
+                if gap_percent >= MIN_GAP_PERCENT:
+                    fvg_list.append((prev_high, curr_low))
+            elif next_low > curr_low:
+                gap_size = next_low - curr_low
+                gap_percent = (gap_size / reference_price) * 100
+                if gap_percent >= MIN_GAP_PERCENT:
+                    fvg_list.append((curr_low, next_low))
+
+        # Check if current price is within any FVG
+        for fvg in fvg_list:
+            if consider_open_close:
+                if fvg[0] <= current_price <= fvg[1]:
+                    return True
+            else:
+                if fvg[0] < current_price < fvg[1]:
+                    return True
+
+        return False
+    except Exception as e:
+        print(f"Error checking FVG for {symbol}: {e}")
+        return False
+
+def process_symbol(data):
+    """Process a single symbol for FVG setups - for parallel processing."""
+    symbol, exchange, market_type, recent_period = data
+    fvg_setups = []
+    
+    try:
+        # Get current price
+        ticker = exchange.fetch_ticker(symbol)
+        current_price = ticker["last"]
+        
+        # Skip symbols with price too low (often have lower liquidity)
+        if current_price < 0.001:
+            return []
+
+        # Fetch 1H data (3 months)
+        since_1h = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000)
+        df_1h = get_ohlcv_data(exchange, symbol, "1h", since_1h)
+        if df_1h is None or len(df_1h) < 3:  # Need at least 3 candles for FVG
+            return []
+            
+        # Check price volatility - skip low volatility coins
+        price_range = (df_1h['High'].max() - df_1h['Low'].min()) / df_1h['Low'].min()
+        if price_range < 0.05:  # Less than 5% range
+            return []
+
+        # Find 1H FVGs using vectorized operations
+        fvg_1h_list = []
+        for i in range(1, len(df_1h) - 1):
+            # Bullish FVG: Gap between i-1 high and i+1 low - with minimum gap filter
+            if df_1h.iloc[i-1]["High"] < df_1h.iloc[i+1]["Low"]:
+                # Calculate gap size as percentage of price
+                gap_size = df_1h.iloc[i+1]["Low"] - df_1h.iloc[i-1]["High"]
+                gap_percent = (gap_size / df_1h.iloc[i-1]["Close"]) * 100
+                
+                # Only include FVGs with gap >= MIN_GAP_PERCENT
+                if gap_percent >= MIN_GAP_PERCENT:
+                    fvg_1h_list.append({
+                        "type": "bullish",
+                        "high": df_1h.iloc[i]["High"],
+                        "low": df_1h.iloc[i+1]["Low"],
+                        "timestamp": df_1h.index[i],
+                        "gap_percent": gap_percent
+                    })
+                    
+            # Bearish FVG: Gap between i+1 high and i-1 low - with minimum gap filter
+            if df_1h.iloc[i+1]["High"] > df_1h.iloc[i-1]["Low"]:
+                # Calculate gap size as percentage of price
+                gap_size = df_1h.iloc[i+1]["High"] - df_1h.iloc[i-1]["Low"]
+                gap_percent = (gap_size / df_1h.iloc[i-1]["Close"]) * 100
+                
+                # Only include FVGs with gap >= MIN_GAP_PERCENT
+                if gap_percent >= MIN_GAP_PERCENT:
+                    fvg_1h_list.append({
+                        "type": "bearish",
+                        "high": df_1h.iloc[i+1]["High"],
+                        "low": df_1h.iloc[i]["Low"],
+                        "timestamp": df_1h.index[i],
+                        "gap_percent": gap_percent
+                    })
+
+        # If no 1H FVGs found, return empty list
+        if not fvg_1h_list:
+            return []
+
+        # Fetch 5M data (for the recent period)
+        since_5m = int(recent_period.timestamp() * 1000)
+        df_5m = get_ohlcv_data(exchange, symbol, "5m", since_5m)
+        if df_5m is None or len(df_5m) < 3:  # Need at least 3 candles for FVG
+            return []
+
+        # Check for interactions with any 1H FVG, regardless of when it formed
+        for fvg_1h in fvg_1h_list:
+            # Process all 5M candles
+            for i in range(2, len(df_5m) - 1):  # Start at 2 to allow for i-2 check
+                if fvg_1h["type"] == "bullish":
+                    # Check if this is a bullish 5M FVG formation - with minimum gap filter
+                    bullish_gap = df_5m.iloc[i+1]["Low"] - df_5m.iloc[i-1]["High"]
+                    bullish_gap_percent = (bullish_gap / df_5m.iloc[i-1]["Close"]) * 100
+                    
+                    is_bullish_5m_fvg = (df_5m.iloc[i-1]["High"] < df_5m.iloc[i+1]["Low"] and 
+                                         bullish_gap_percent >= MIN_GAP_PERCENT)
+                    
+                    # Check if price crossed into the upper line of the 1H FVG
+                    crossed_upper_line = (df_5m.iloc[i-2]["High"] < fvg_1h["high"] and 
+                                       df_5m.iloc[i-1]["High"] >= fvg_1h["high"])
+                    
+                    # Check if the 1H FVG line falls within the 5M FVG range
+                    fvg_on_upper_line = df_5m.iloc[i-1]["High"] <= fvg_1h["high"] <= df_5m.iloc[i+1]["Low"]
+                    
+                    if is_bullish_5m_fvg and crossed_upper_line and fvg_on_upper_line:
+                        fvg_setups.append({
+                            "symbol": symbol,
+                            "type": "bullish",
+                            "current_price": current_price,
+                            "fvg_1h": fvg_1h,
+                            "fvg_5m": {
+                                "high": df_5m.iloc[i-1]["High"],
+                                "low": df_5m.iloc[i+1]["Low"],
+                                "gap_size": bullish_gap,
+                                "gap_percent": bullish_gap_percent,
+                                "timestamp": df_5m.index[i]
+                            },
+                            "stop_loss": df_5m.iloc[i]["High"],
+                            "risk_reward": 2  # Default to 2R, can be adjusted
+                        })
+                else:  # bearish
+                    # Check if this is a bearish 5M FVG formation - with minimum gap filter
+                    bearish_gap = df_5m.iloc[i+1]["High"] - df_5m.iloc[i-1]["Low"]
+                    bearish_gap_percent = (bearish_gap / df_5m.iloc[i-1]["Close"]) * 100
+                    
+                    is_bearish_5m_fvg = (df_5m.iloc[i+1]["High"] > df_5m.iloc[i-1]["Low"] and 
+                                         bearish_gap_percent >= MIN_GAP_PERCENT)
+                    
+                    # Check if price crossed into the lower line of the 1H FVG
+                    crossed_lower_line = (df_5m.iloc[i-2]["Low"] > fvg_1h["low"] and 
+                                       df_5m.iloc[i-1]["Low"] <= fvg_1h["low"])
+                    
+                    # Check if the 1H FVG line falls within the 5M FVG range
+                    fvg_on_lower_line = df_5m.iloc[i-1]["Low"] <= fvg_1h["low"] <= df_5m.iloc[i+1]["High"]
+                    
+                    if is_bearish_5m_fvg and crossed_lower_line and fvg_on_lower_line:
+                        fvg_setups.append({
+                            "symbol": symbol,
+                            "type": "bearish",
+                            "current_price": current_price,
+                            "fvg_1h": fvg_1h,
+                            "fvg_5m": {
+                                "high": df_5m.iloc[i+1]["High"],
+                                "low": df_5m.iloc[i-1]["Low"],
+                                "gap_size": bearish_gap,
+                                "gap_percent": bearish_gap_percent,
+                                "timestamp": df_5m.index[i]
+                            },
+                            "stop_loss": df_5m.iloc[i]["Low"],
+                            "risk_reward": 2  # Default to 2R, can be adjusted
+                        })
+        
+        return fvg_setups
+    
+    except Exception as e:
+        print(f"\rProcessing symbol {symbol} - Error: {str(e)}", end="")
+        return []
 
 def find_fvg_setups(exchange, symbols, market_type):
     """
@@ -232,133 +462,35 @@ def find_fvg_setups(exchange, symbols, market_type):
     Returns:
         list: List of FVG setups
     """
-    fvg_setups = []
     total_symbols = len(symbols)
     # We'll still look for 5M FVGs in the recent past (last 7 days) for performance reasons
     recent_period = datetime.now(timezone.utc) - timedelta(days=7)
     
-    print(f"\nProcessing {total_symbols} symbols...")
+    print(f"\nProcessing {total_symbols} symbols using parallel processing...")
+    print(f"Using minimum FVG gap filter: {MIN_GAP_PERCENT}% of price")
     
-    for idx, symbol in enumerate(symbols, 1):
-        try:
-            # Get current price
-            ticker = exchange.fetch_ticker(symbol)
-            current_price = ticker["last"]
-
-            # Fetch 1H data (3 months) - we can extend this to get more historical data if needed
-            since_1h = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000)
-            print(f"\rProcessing {idx}/{total_symbols}: {symbol} - Fetching 1H data...", end="")
-            df_1h = get_ohlcv_data(exchange, symbol, "1h", since_1h)
-            if df_1h is None:
-                continue
-
-            # Find 1H FVGs - no time restriction
-            fvg_1h_list = []
-            for i in range(1, len(df_1h) - 1):
-                # Bullish FVG: Gap between i-1 high and i+1 low, and i+1 close below i high
-                if (df_1h.iloc[i-1]["High"] < df_1h.iloc[i+1]["Low"] and 
-                    df_1h.iloc[i+1]["Close"] < df_1h.iloc[i]["High"]):
-                    fvg_1h_list.append({
-                        "type": "bullish",
-                        "high": df_1h.iloc[i]["High"],  # Middle candle high
-                        "low": df_1h.iloc[i+1]["Low"],  # Right candle low
-                        "timestamp": df_1h.index[i]
-                    })
-                # Bearish FVG: Gap between i+1 high and i-1 low, and i+1 close above i low
-                if (df_1h.iloc[i+1]["High"] > df_1h.iloc[i-1]["Low"] and 
-                    df_1h.iloc[i+1]["Close"] > df_1h.iloc[i]["Low"]):
-                    fvg_1h_list.append({
-                        "type": "bearish",
-                        "high": df_1h.iloc[i+1]["High"],  # Right candle high
-                        "low": df_1h.iloc[i]["Low"],      # Middle candle low
-                        "timestamp": df_1h.index[i]
-                    })
-
-            # If no 1H FVGs found, continue to next symbol
-            if not fvg_1h_list:
-                continue
-
-            print(f"\rProcessing {idx}/{total_symbols}: {symbol} - Found {len(fvg_1h_list)} 1H FVGs, checking 5M...", end="")
-
-            # Fetch 5M data (for the recent period - 7 days is enough to find recent setups)
-            since_5m = int(recent_period.timestamp() * 1000)
-            df_5m = get_ohlcv_data(exchange, symbol, "5m", since_5m)
-            if df_5m is None:
-                continue
-
-            # Check for interactions with any 1H FVG, regardless of when it formed
-            for fvg_1h in fvg_1h_list:
-                # Look for 5M FVG in the recent period
-                for i in range(1, len(df_5m) - 1):
-                    if fvg_1h["type"] == "bullish":
-                        # Check if this is a bullish 5M FVG formation - only check for the gap
-                        is_bullish_5m_fvg = df_5m.iloc[i-1]["High"] < df_5m.iloc[i+1]["Low"]
-                        
-                        # Check if price crossed into the upper line of the 1H FVG
-                        crossed_upper_line = False
-                        if i > 0:  # Make sure we can check the previous candle
-                            # Price crossed from below to above the upper line of 1H FVG
-                            crossed_upper_line = (df_5m.iloc[i-2]["High"] < fvg_1h["high"] and 
-                                               df_5m.iloc[i-1]["High"] >= fvg_1h["high"])
-                        
-                        # Check if any of the three candles forming the FVG touch the upper line
-                        touches_upper_line = (abs(df_5m.iloc[i-1]["High"] - fvg_1h["high"]) / fvg_1h["high"] < 0.001 or
-                                           abs(df_5m.iloc[i]["High"] - fvg_1h["high"]) / fvg_1h["high"] < 0.001 or
-                                           abs(df_5m.iloc[i+1]["High"] - fvg_1h["high"]) / fvg_1h["high"] < 0.001)
-                        
-                        if is_bullish_5m_fvg and crossed_upper_line and touches_upper_line:
-                            fvg_setups.append({
-                                "symbol": symbol,
-                                "type": "bullish",
-                                "current_price": current_price,
-                                "fvg_1h": fvg_1h,
-                                "fvg_5m": {
-                                    "high": df_5m.iloc[i-1]["High"],
-                                    "low": df_5m.iloc[i+1]["Low"],
-                                    "timestamp": df_5m.index[i]
-                                },
-                                "stop_loss": df_5m.iloc[i]["High"],
-                                "risk_reward": 2  # Default to 2R, can be adjusted
-                            })
-                    else:  # bearish
-                        # Check if this is a bearish 5M FVG formation - only check for the gap
-                        is_bearish_5m_fvg = df_5m.iloc[i+1]["High"] > df_5m.iloc[i-1]["Low"]
-                        
-                        # Check if price crossed into the lower line of the 1H FVG
-                        crossed_lower_line = False
-                        if i > 0:  # Make sure we can check the previous candle
-                            # Price crossed from above to below the lower line of 1H FVG
-                            crossed_lower_line = (df_5m.iloc[i-2]["Low"] > fvg_1h["low"] and 
-                                              df_5m.iloc[i-1]["Low"] <= fvg_1h["low"])
-                        
-                        # Check if any of the three candles forming the FVG touch the lower line
-                        touches_lower_line = (abs(df_5m.iloc[i-1]["Low"] - fvg_1h["low"]) / fvg_1h["low"] < 0.001 or
-                                          abs(df_5m.iloc[i]["Low"] - fvg_1h["low"]) / fvg_1h["low"] < 0.001 or
-                                          abs(df_5m.iloc[i+1]["Low"] - fvg_1h["low"]) / fvg_1h["low"] < 0.001)
-                        
-                        if is_bearish_5m_fvg and crossed_lower_line and touches_lower_line:
-                            fvg_setups.append({
-                                "symbol": symbol,
-                                "type": "bearish",
-                                "current_price": current_price,
-                                "fvg_1h": fvg_1h,
-                                "fvg_5m": {
-                                    "high": df_5m.iloc[i+1]["High"],
-                                    "low": df_5m.iloc[i-1]["Low"],
-                                    "timestamp": df_5m.index[i]
-                                },
-                                "stop_loss": df_5m.iloc[i]["Low"],
-                                "risk_reward": 2  # Default to 2R, can be adjusted
-                            })
-
-            if fvg_setups and fvg_setups[-1]["symbol"] == symbol:
-                print(f"\rProcessing {idx}/{total_symbols}: {symbol} - Found setup!                    ", end="")
-            else:
-                print(f"\rProcessing {idx}/{total_symbols}: {symbol} - No setup found.                    ", end="")
-
-        except Exception as e:
-            print(f"\rProcessing {idx}/{total_symbols}: {symbol} - Error: {str(e)}                    ", end="")
-            continue
-
+    # Setup for parallel processing
+    max_workers = min(os.cpu_count(), 4)  # Use up to 4 CPU cores
+    
+    # Prepare data for parallel processing
+    symbol_data = [(symbol, exchange, market_type, recent_period) for symbol in symbols]
+    
+    all_setups = []
+    
+    # Process in chunks to avoid memory issues
+    chunk_size = 50
+    for i in range(0, len(symbol_data), chunk_size):
+        chunk = symbol_data[i:i+chunk_size]
+        
+        # Process symbols in parallel
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_symbol, chunk))
+        
+        # Flatten results
+        chunk_setups = [setup for symbol_setups in results for setup in symbol_setups]
+        all_setups.extend(chunk_setups)
+        
+        print(f"\rProcessed {min(i+chunk_size, total_symbols)}/{total_symbols} symbols, found {len(all_setups)} setups so far...", end="")
+    
     print("\n\nScreening complete!")
-    return fvg_setups
+    return all_setups
