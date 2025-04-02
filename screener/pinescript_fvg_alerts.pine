@@ -1,0 +1,109 @@
+//@version=5
+indicator("FVG Alerts", overlay=true)
+
+// Input parameters
+min_1h_gap_percent = input.float(0.4, "Minimum 1H Gap %", minval=0.0, step=0.1)
+min_5m_gap_percent = input.float(0.1, "Minimum 5M Gap %", minval=0.0, step=0.1)
+
+// Get data for both timeframes
+[high_1h, low_1h, open_1h, close_1h] = request.security(syminfo.tickerid, "60", [high, low, open, close])
+[high_5m, low_5m, open_5m, close_5m] = request.security(syminfo.tickerid, "5", [high, low, open, close])
+
+// Function to check if a candle is bearish
+is_bearish(candle_open, candle_close) =>
+    candle_open > candle_close
+
+// Function to calculate gap percentage
+gap_percent(gap_size, close_price) =>
+    (gap_size / close_price) * 100
+
+// Reset variables on each bar
+var float fvg_1h_upper = na
+var float fvg_1h_lower = na
+var float fvg_1h_gap = na
+var string fvg_1h_type = na
+
+var float fvg_5m_upper = na
+var float fvg_5m_lower = na
+var float fvg_5m_gap = na
+var string fvg_5m_type = na
+
+// Detect 1H FVGs
+if not is_bearish(open_1h[1], close_1h[1]) and low_1h > high_1h[2]
+    gap_size = low_1h - high_1h[2]
+    gap_pct = gap_percent(gap_size, close_1h[1])
+    if gap_pct >= min_1h_gap_percent
+        fvg_1h_type := "bullish"
+        fvg_1h_upper := low_1h
+        fvg_1h_lower := high_1h[2]
+        fvg_1h_gap := gap_pct
+
+if is_bearish(open_1h[1], close_1h[1]) and high_1h < low_1h[2]
+    gap_size = low_1h[2] - high_1h
+    gap_pct = gap_percent(gap_size, close_1h[1])
+    if gap_pct >= min_1h_gap_percent
+        fvg_1h_type := "bearish"
+        fvg_1h_upper := low_1h[2]
+        fvg_1h_lower := high_1h
+        fvg_1h_gap := gap_pct
+
+// Detect 5M FVGs
+if not is_bearish(open_5m[1], close_5m[1]) and low_5m > high_5m[2]
+    gap_size = low_5m - high_5m[2]
+    gap_pct = gap_percent(gap_size, close_5m[1])
+    if gap_pct >= min_5m_gap_percent
+        fvg_5m_type := "bullish"
+        fvg_5m_upper := low_5m
+        fvg_5m_lower := high_5m[2]
+        fvg_5m_gap := gap_pct
+
+if is_bearish(open_5m[1], close_5m[1]) and high_5m < low_5m[2]
+    gap_size = low_5m[2] - high_5m
+    gap_pct = gap_percent(gap_size, close_5m[1])
+    if gap_pct >= min_5m_gap_percent
+        fvg_5m_type := "bearish"
+        fvg_5m_upper := low_5m[2]
+        fvg_5m_lower := high_5m
+        fvg_5m_gap := gap_pct
+
+// Check for alignment between 1H and 5M FVGs
+var bool aligned_bullish = false
+var bool aligned_bearish = false
+
+// Reset alignment flags
+aligned_bullish := false
+aligned_bearish := false
+
+// Bullish alignment: 1H FVG's upper line within 5M FVG range
+if fvg_5m_type == "bullish" and fvg_1h_type == "bullish"
+    aligned_bullish := fvg_5m_lower <= fvg_1h_upper and fvg_1h_upper <= fvg_5m_upper
+
+// Bearish alignment: 1H FVG's lower line within 5M FVG range
+if fvg_5m_type == "bearish" and fvg_1h_type == "bearish"
+    aligned_bearish := fvg_5m_lower <= fvg_1h_lower and fvg_1h_lower <= fvg_5m_upper
+
+// Plot alert icons
+plotshape(aligned_bullish, title="Bullish Alignment", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(aligned_bearish, title="Bearish Alignment", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+
+// Plot FVG ranges when they exist
+var line fvg_1h_upper_line = na
+var line fvg_1h_lower_line = na
+var line fvg_5m_upper_line = na
+var line fvg_5m_lower_line = na
+
+if not na(fvg_1h_upper)
+    line.delete(fvg_1h_upper_line)
+    line.delete(fvg_1h_lower_line)
+    fvg_1h_upper_line := line.new(bar_index - 2, fvg_1h_upper, bar_index + 10, fvg_1h_upper, color=color.blue, style=line.style_dashed)
+    fvg_1h_lower_line := line.new(bar_index - 2, fvg_1h_lower, bar_index + 10, fvg_1h_lower, color=color.blue, style=line.style_dashed)
+
+if not na(fvg_5m_upper)
+    line.delete(fvg_5m_upper_line)
+    line.delete(fvg_5m_lower_line)
+    fvg_5m_upper_line := line.new(bar_index - 2, fvg_5m_upper, bar_index + 10, fvg_5m_upper, color=color.yellow, style=line.style_dashed)
+    fvg_5m_lower_line := line.new(bar_index - 2, fvg_5m_lower, bar_index + 10, fvg_5m_lower, color=color.yellow, style=line.style_dashed)
+
+// Alert conditions
+alertcondition(aligned_bullish, title="Bullish FVG Alignment", message="Bullish FVG alignment detected!")
+alertcondition(aligned_bearish, title="Bearish FVG Alignment", message="Bearish FVG alignment detected!") 
