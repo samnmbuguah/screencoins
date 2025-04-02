@@ -1,0 +1,194 @@
+//@version=5
+indicator("Advanced FVG Screener", overlay=true, max_bars_back=1000, max_boxes_count=500, max_lines_count=500)
+
+// User inputs
+useCurrTF = input.bool(true, "Current Timeframe FVGs", group="FVG Display")
+use1HTF = input.bool(true, "1H Timeframe FVGs", group="FVG Display")
+lookbackPeriod = input.int(100, "FVG Lookback Period", minval=10, maxval=1000, group="Analysis Settings")
+showLabels = input.bool(true, "Show Labels", group="Visuals")
+showMidpoints = input.bool(true, "Show Midpoint Lines", group="Visuals")
+deleteOnFill = input.bool(true, "Delete FVGs On Fill", group="Visuals")
+
+// Colors
+bullishFVGColor = input.color(color.new(#4CAF50, 90), "Bullish FVG", group="Colors")
+bearishFVGColor = input.color(color.new(#FF5252, 90), "Bearish FVG", group="Colors")
+bullish1HFVGColor = input.color(color.new(#00796B, 80), "1H Bullish FVG", group="Colors")
+bearish1HFVGColor = input.color(color.new(#D32F2F, 80), "1H Bearish FVG", group="Colors")
+midPointColor = input.color(color.new(#FFFFFF, 85), "Midpoint Line", group="Colors")
+textColor = input.color(#FFFFFF, "Label Text", group="Colors")
+
+// Arrays to store FVGs
+var bullishBoxes = array.new_box()
+var bearishBoxes = array.new_box()
+var bullishMidLines = array.new_line()
+var bearishMidLines = array.new_line()
+var bullishLabels = array.new_label()
+var bearishLabels = array.new_label()
+
+// Transparent color for box borders
+var transparentColor = color.new(color.white, 100)
+
+// Function to create a FVG box
+createFVG(upperLimit, lowerLimit, barIndex, isBullish, is1H) =>
+    // Calculate FVG midpoint
+    midPoint = (upperLimit + lowerLimit) / 2
+    
+    // Calculate gap size as percentage (for display only)
+    gapSize = upperLimit - lowerLimit
+    gapPct = (gapSize / close) * 100
+    
+    // Set colors based on FVG type and timeframe
+    boxColor = isBullish ? 
+      (is1H ? bullish1HFVGColor : bullishFVGColor) : 
+      (is1H ? bearish1HFVGColor : bearishFVGColor)
+    
+    // Create box
+    box = box.new(barIndex, upperLimit, barIndex + 1, lowerLimit, 
+      border_color=transparentColor, bgcolor=boxColor, extend=extend.right)
+    
+    // Create midpoint line if enabled
+    if showMidpoints
+        midLine = line.new(barIndex, midPoint, barIndex + 1, midPoint, 
+          color=midPointColor, extend=extend.right)
+        if isBullish
+            array.push(bullishMidLines, midLine)
+        else
+            array.push(bearishMidLines, midLine)
+    
+    // Create label if enabled
+    if showLabels
+        labelText = (is1H ? "1H " : "") + 
+                   (isBullish ? "Bullish " : "Bearish ") + 
+                   "FVG " + str.tostring(gapPct, "#.##") + "%"
+        labelStyle = isBullish ? label.style_label_up : label.style_label_down
+        labelOffset = isBullish ? 10 : -10
+        newLabel = label.new(barIndex + 5, midPoint + labelOffset, labelText, 
+            style=labelStyle, color=boxColor, textcolor=textColor, size=size.small)
+        if isBullish
+            array.push(bullishLabels, newLabel)
+        else
+            array.push(bearishLabels, newLabel)
+    
+    // Add box to appropriate array
+    if isBullish
+        array.push(bullishBoxes, box)
+    else
+        array.push(bearishBoxes, box)
+
+// Function to check if a FVG has been filled and handle it
+checkFilled(fvgBoxes, fvgMidLines, fvgLabels, high, low, isBullish) =>
+    if array.size(fvgBoxes) > 0
+        for i = array.size(fvgBoxes) - 1 downto 0
+            currentBox = array.get(fvgBoxes, i)
+            topLevel = box.get_top(currentBox)
+            bottomLevel = box.get_bottom(currentBox)
+            
+            // Check if filled - either completely or at midpoint
+            isFilled = false
+            if isBullish
+                isFilled := high >= topLevel
+            else
+                isFilled := low <= bottomLevel
+            
+            // If FVG is filled, handle it
+            if isFilled
+                // Delete or modify box
+                if deleteOnFill
+                    box.delete(currentBox)
+                else
+                    box.set_extend(currentBox, extend.none)
+                    box.set_right(currentBox, bar_index)
+                
+                // Delete or modify midpoint line
+                if showMidpoints and array.size(fvgMidLines) > i
+                    currentMid = array.get(fvgMidLines, i)
+                    if deleteOnFill
+                        line.delete(currentMid)
+                    else
+                        line.set_extend(currentMid, extend.none)
+                        line.set_x2(currentMid, bar_index)
+                
+                // Delete label
+                if showLabels and array.size(fvgLabels) > i
+                    currentLabel = array.get(fvgLabels, i)
+                    if deleteOnFill
+                        label.delete(currentLabel)
+                
+                // Remove from arrays
+                array.remove(fvgBoxes, i)
+                if showMidpoints and array.size(fvgMidLines) > i
+                    array.remove(fvgMidLines, i)
+                if showLabels and array.size(fvgLabels) > i
+                    array.remove(fvgLabels, i)
+
+// Function to check for FVGs in current timeframe
+check5MFVG() =>
+    if useCurrTF and barstate.isconfirmed
+        // Need at least 3 bars of data
+        if bar_index >= 2
+            // Extract previous and current bar information
+            prevOpen = open[1]
+            prevClose = close[1]
+            isPrevBearish = prevOpen > prevClose
+            
+            // Check for bullish FVG - current high below the low of 2 bars ago
+            if isPrevBearish and high < low[2]
+                // Create bullish FVG
+                createFVG(low[2], high, bar_index, true, false)
+            
+            // Check for bearish FVG - current low above the high of 2 bars ago
+            if not isPrevBearish and low > high[2]
+                // Create bearish FVG
+                createFVG(low, high[2], bar_index, false, false)
+
+// Function to check for 1H FVGs
+check1HFVG() =>
+    if use1HTF
+        // Request 1H data
+        hOpen1 = request.security(syminfo.tickerid, "60", open[1], barmerge.gaps_off, barmerge.lookahead_on) 
+        hClose1 = request.security(syminfo.tickerid, "60", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+        hHigh0 = request.security(syminfo.tickerid, "60", high, barmerge.gaps_off, barmerge.lookahead_on)
+        hLow0 = request.security(syminfo.tickerid, "60", low, barmerge.gaps_off, barmerge.lookahead_on)
+        hHigh2 = request.security(syminfo.tickerid, "60", high[2], barmerge.gaps_off, barmerge.lookahead_on)
+        hLow2 = request.security(syminfo.tickerid, "60", low[2], barmerge.gaps_off, barmerge.lookahead_on)
+        
+        // Check if we have a new 1H bar
+        newHourlyBar = ta.change(time("60"))
+        
+        if newHourlyBar
+            isPrevBearish = hOpen1 > hClose1
+            
+            // Check for bullish 1H FVG
+            if isPrevBearish and hHigh0 < hLow2
+                createFVG(hLow2, hHigh0, bar_index, true, true)
+            
+            // Check for bearish 1H FVG
+            if not isPrevBearish and hLow0 > hHigh2
+                createFVG(hLow0, hHigh2, bar_index, false, true)
+
+// Check for and create new FVGs
+check5MFVG()
+check1HFVG()
+
+// Check if any FVGs have been filled
+checkFilled(bullishBoxes, bullishMidLines, bullishLabels, high, low, true)
+checkFilled(bearishBoxes, bearishMidLines, bearishLabels, high, low, false)
+
+// Cleanup old FVGs to avoid memory issues
+if barstate.islast and array.size(bullishBoxes) > lookbackPeriod
+    for i = 0 to array.size(bullishBoxes) - lookbackPeriod - 1
+        if array.size(bullishBoxes) > 0
+            box.delete(array.shift(bullishBoxes))
+        if showMidpoints and array.size(bullishMidLines) > 0
+            line.delete(array.shift(bullishMidLines))
+        if showLabels and array.size(bullishLabels) > 0
+            label.delete(array.shift(bullishLabels))
+
+if barstate.islast and array.size(bearishBoxes) > lookbackPeriod
+    for i = 0 to array.size(bearishBoxes) - lookbackPeriod - 1
+        if array.size(bearishBoxes) > 0
+            box.delete(array.shift(bearishBoxes))
+        if showMidpoints and array.size(bearishMidLines) > 0
+            line.delete(array.shift(bearishMidLines))
+        if showLabels and array.size(bearishLabels) > 0
+            label.delete(array.shift(bearishLabels)) 
