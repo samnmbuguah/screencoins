@@ -11,27 +11,94 @@ import pandas as pd
 MIN_1H_GAP_PERCENT = 0.4
 MIN_5M_GAP_PERCENT = 0.1
 
-def get_monthly_value_area(exchange, symbol, start_date):
-    """Get monthly Value Area for a symbol"""
+def get_monthly_value_area(exchange, symbol, timestamp=None):
+    """
+    Get monthly Value Area for a symbol based on the month of the timestamp
+    If timestamp is not provided, uses current date
+    
+    The Value Area will be the price range where 70% of the volume occurred
+    For monthly data, we use a simple approximation based on the high/low range
+    """
     try:
-        # Get monthly data
-        since = int(start_date.timestamp() * 1000)
-        monthly_data = exchange.fetch_ohlcv(symbol, '1M', since=since, limit=1)
-        if not monthly_data:
-            return None, None
+        # Use the month from the provided timestamp, or current date if None
+        if timestamp is None:
+            target_date = datetime.now(timezone.utc)
+        else:
+            # If timestamp is a string, convert to datetime
+            if isinstance(timestamp, str):
+                target_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            else:
+                target_date = timestamp
+                
+        # Get the first day of the month that contains the target date
+        first_day_of_month = datetime(target_date.year, target_date.month, 1, tzinfo=timezone.utc)
+        
+        # Get monthly data for that specific month
+        since = int(first_day_of_month.timestamp() * 1000)
+        
+        # Try to get daily data for more accurate Value Area calculation
+        daily_data = exchange.fetch_ohlcv(symbol, '1d', since=since, limit=31)  # Max 31 days in a month
+        
+        if not daily_data or len(daily_data) < 3:  # Need at least a few days for meaningful calculation
+            # Fall back to monthly candle if daily data is insufficient
+            monthly_data = exchange.fetch_ohlcv(symbol, '1M', since=since, limit=1)
             
-        # OHLCV data is returned as [timestamp, open, high, low, close, volume]
-        timestamp, open_price, high, low, close, volume = monthly_data[0]
+            if not monthly_data:
+                return None, None
+            
+            # Unpack the OHLCV data
+            timestamp, open_price, high, low, close, volume = monthly_data[0]
+            
+            # Calculate the Value Area (70% of the price range)
+            # For simplicity with monthly data, we'll use a value area that's 70% of the range centered at the middle
+            mid_price = (high + low) / 2
+            full_range = high - low
+            va_range = full_range * 0.7  # 70% of the total range
+            
+            # The Value Area is centered around the mid price
+            va_high = mid_price + (va_range / 2)
+            va_low = mid_price - (va_range / 2)
+            
+            # Make sure Value Area stays within the month's high/low
+            va_high = min(va_high, high)
+            va_low = max(va_low, low)
+            
+            print(f"Monthly VA for {symbol} ({target_date.strftime('%Y-%m')}): H={high:.4f}, L={low:.4f}, VAH={va_high:.4f}, VAL={va_low:.4f}")
+            
+            return va_high, va_low
         
-        # Calculate price level and volume
-        price = low + (high - low) * 0.5
+        # If we have daily data, use it for a more accurate Value Area calculation
+        # Convert to DataFrame for easier manipulation
+        df_daily = pd.DataFrame(daily_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_daily['timestamp'] = pd.to_datetime(df_daily['timestamp'], unit='ms')
+        df_daily.set_index('timestamp', inplace=True)
         
-        # For monthly data, we'll use a simple approach since we only have one candle
-        # The Value Area will be the price level with 70% of the volume
-        va_high = price
-        va_low = price
+        # Sort by volume (descending)
+        df_daily_sorted = df_daily.sort_values(by='volume', ascending=False)
+        
+        # Calculate cumulative volume percentage
+        total_volume = df_daily['volume'].sum()
+        df_daily_sorted['vol_pct'] = df_daily_sorted['volume'].cumsum() / total_volume * 100
+        
+        # Select days that make up 70% of the total volume
+        value_area_days = df_daily_sorted[df_daily_sorted['vol_pct'] <= 70]
+        
+        if len(value_area_days) < 1:
+            # If no days match (shouldn't happen), include at least the highest volume day
+            value_area_days = df_daily_sorted.iloc[:1]
+        
+        # Get high and low of the Value Area
+        va_high = value_area_days['high'].max()
+        va_low = value_area_days['low'].min()
+        
+        # Get overall month high and low for reference
+        month_high = df_daily['high'].max()
+        month_low = df_daily['low'].min()
+        
+        print(f"Daily-based VA for {symbol} ({target_date.strftime('%Y-%m')}): H={month_high:.4f}, L={month_low:.4f}, VAH={va_high:.4f}, VAL={va_low:.4f}")
         
         return va_high, va_low
+        
     except Exception as e:
         print(f"Error getting monthly Value Area for {symbol}: {str(e)}")
         return None, None
@@ -48,12 +115,6 @@ def custom_process_symbol(data):
         
         # Skip symbols with price too low (often have lower liquidity)
         if current_price < 0.000001:
-            return []
-
-        # Get monthly Value Area
-        va_high, va_low = get_monthly_value_area(exchange, symbol, start_of_2025)
-        if va_high is None or va_low is None:
-            print(f"Could not calculate Value Area for {symbol}")
             return []
 
         # Fetch 1H data from beginning of 2025
@@ -139,6 +200,14 @@ def custom_process_symbol(data):
                 prev_candle_5m = df_5m.iloc[i-1]      # Previous candle (i-1)
                 prev2_candle_5m = df_5m.iloc[i-2]     # Two candles back (i-2)
                 
+                # Get monthly Value Area based on the 5M FVG's timestamp
+                # This ensures we use the Value Area for the specific month of the 5M FVG
+                timestamp_5m = df_5m.index[i-1]  # Use the middle candle timestamp (i-1)
+                va_high, va_low = get_monthly_value_area(exchange, symbol, timestamp_5m)
+                if va_high is None or va_low is None:
+                    # Skip this candle if we couldn't get the Value Area
+                    continue
+                
                 # Check if previous candle is bearish or bullish
                 is_prev_bearish_5m = prev_candle_5m["Open"] > prev_candle_5m["Close"]
                 
@@ -150,8 +219,8 @@ def custom_process_symbol(data):
                     
                     # Only include FVGs with gap >= MIN_5M_GAP_PERCENT and below Value Area Low
                     if bullish_gap_percent >= MIN_5M_GAP_PERCENT and current_candle_5m["Low"] < va_low:
-                        # For bullish setup, check if the 1H FVG's upper line is within the 5M FVG range
-                        line_in_range = prev2_candle_5m["High"] <= fvg_1h["upper_line"] <= current_candle_5m["Low"]
+                        # For bullish setup, check if the 1H FVG's LOWER line is within the 5M FVG range
+                        line_in_range = prev2_candle_5m["High"] <= fvg_1h["lower_line"] <= current_candle_5m["Low"]
                         
                         if line_in_range:
                             fvg_setups.append({
@@ -176,7 +245,7 @@ def custom_process_symbol(data):
                                 },
                                 "stop_loss": prev_candle_5m["Low"],     # Using middle candle low as stop
                                 "risk_reward": 2,                        # Default to 2R
-                                "alignment_type": "upper",              # For bullish setups, we align on upper line
+                                "alignment_type": "lower",              # For bullish setups, we align on lower line
                                 "va_high": va_high,                     # Add Value Area information
                                 "va_low": va_low
                             })
@@ -189,8 +258,8 @@ def custom_process_symbol(data):
                     
                     # Only include FVGs with gap >= MIN_5M_GAP_PERCENT and above Value Area High
                     if bearish_gap_percent >= MIN_5M_GAP_PERCENT and current_candle_5m["High"] > va_high:
-                        # For bearish setup, check if the 1H FVG's lower line is within the 5M FVG range
-                        line_in_range = current_candle_5m["High"] <= fvg_1h["lower_line"] <= prev2_candle_5m["Low"]
+                        # For bearish setup, check if the 1H FVG's UPPER line is within the 5M FVG range
+                        line_in_range = current_candle_5m["High"] <= fvg_1h["upper_line"] <= prev2_candle_5m["Low"]
                         
                         if line_in_range:
                             fvg_setups.append({
@@ -215,7 +284,7 @@ def custom_process_symbol(data):
                                 },
                                 "stop_loss": prev_candle_5m["High"],    # Using middle candle high as stop
                                 "risk_reward": 2,                        # Default to 2R
-                                "alignment_type": "lower",              # For bearish setups, we align on lower line
+                                "alignment_type": "upper",              # For bearish setups, we align on upper line
                                 "va_high": va_high,                     # Add Value Area information
                                 "va_low": va_low
                             })
