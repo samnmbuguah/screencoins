@@ -5,12 +5,13 @@ from utils import get_ohlcv_data, calculate_value_area
 import json
 import os
 import numpy as np
+import time
 # Since both MarketProfile and market-profile aren't working correctly,
 # let's implement our own volume profile calculation
 
 # Minimum gap percentage thresholds
-MIN_1H_GAP_PERCENT = 0.4
-MIN_5M_GAP_PERCENT = 0.1
+MIN_1H_GAP_PERCENT = 0.042
+MIN_5M_GAP_PERCENT = 0.01
 
 def get_monthly_value_area(exchange, symbol, timestamp=None):
     """
@@ -87,6 +88,78 @@ def get_monthly_value_area(exchange, symbol, timestamp=None):
         except Exception:
             return None, None
 
+def fetch_all_candles(exchange, symbol, timeframe, since, until=None):
+    """
+    Fetch all candles for a given timeframe using pagination to overcome API limits
+    """
+    all_candles = []
+    limit = 500  # Binance API limit per request
+    current_since = since
+    done = False
+    
+    while not done:
+        try:
+            # Fetch a batch of candles
+            candles = exchange.fetch_ohlcv(symbol, timeframe, since=current_since, limit=limit)
+            
+            if not candles or len(candles) == 0:
+                break
+                
+            # Add fetched candles to our list
+            all_candles.extend(candles)
+            
+            # Update the since parameter for the next request
+            # Use the timestamp of the last candle plus the timeframe duration
+            last_timestamp = candles[-1][0]
+            
+            if timeframe == '1h':
+                current_since = last_timestamp + (60 * 60 * 1000)  # Add 1 hour in milliseconds
+            elif timeframe == '5m':
+                current_since = last_timestamp + (5 * 60 * 1000)   # Add 5 minutes in milliseconds
+            
+            # If we have an until timestamp and we've passed it, we're done
+            if until and last_timestamp >= until:
+                done = True
+                
+            # If we got fewer candles than the limit, we're at the end
+            if len(candles) < limit:
+                done = True
+                
+            # Add a small delay to avoid rate limiting
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"Error fetching candles: {str(e)}")
+            break
+    
+    # Convert to DataFrame
+    if not all_candles:
+        return None
+        
+    df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
+    
+    # Rename columns to match the expected format
+    df = df.rename(columns={
+        'open': 'Open',
+        'high': 'High',
+        'low': 'Low',
+        'close': 'Close',
+        'volume': 'Volume'
+    })
+    
+    # Filter to date range if until is specified
+    if until:
+        # Convert until to a timestamp with same timezone as the index
+        until_ts = pd.Timestamp(until, unit='ms')
+        # Ensure timezone consistency
+        if df.index.tz is not None:
+            until_ts = until_ts.tz_localize(df.index.tz)
+        df = df[df.index < until_ts]
+    
+    return df
+
 def test_1h_fvg_detection():
     """Test 1H FVG detection logic"""
     print("\n=== Testing 1H FVG Detection ===")
@@ -107,7 +180,12 @@ def test_1h_fvg_detection():
     start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
     since = int(start_date.timestamp() * 1000)
     
-    df_1h = get_ohlcv_data(exchange, symbol, "1h", since)
+    # Fetch all 1H candles since start date
+    print(f"Fetching 1H candles for {symbol} from {start_date.strftime('%Y-%m-%d')}...")
+    
+    # Use the new function to fetch all candles with pagination
+    df_1h = fetch_all_candles(exchange, symbol, "1h", since)
+    
     if df_1h is None or len(df_1h) < 3:
         print("Failed to get 1H data")
         return []
@@ -182,15 +260,15 @@ def test_5m_fvg_detection():
     print(f"Analyzing 5M data for {symbol} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
     
     since = int(start_date.timestamp() * 1000)
-    df_5m = get_ohlcv_data(exchange, symbol, "5m", since)
+    until = int(end_date.timestamp() * 1000)
+    
+    # Use the new function to fetch all candles with pagination
+    print(f"Fetching 5M candles for {symbol}...")
+    df_5m = fetch_all_candles(exchange, symbol, "5m", since, until)
     
     if df_5m is None or len(df_5m) < 3:
         print("Failed to get 5M data")
         return []
-    
-    # Filter to specific date range
-    end_timestamp = int(end_date.timestamp() * 1000)
-    df_5m = df_5m[df_5m.index < pd.Timestamp(end_timestamp, unit='ms', tz='UTC')]
     
     print(f"Loaded {len(df_5m)} 5M candles for analysis")
     
